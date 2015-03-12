@@ -1,0 +1,8 @@
+# Kown issues
+
+ * No indication in GUI as to why the merge validator failed the merge.
+ * Commit validator does not validate that all modified submodule pointers has
+   a Depends-On entry.
+ * Commit depending on a changeId that has been merged can't be commited.
+
+ 
