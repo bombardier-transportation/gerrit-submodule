@@ -29,7 +29,6 @@ import com.google.gerrit.server.project.ProjectState;
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
 
-import org.eclipse.jgit.errors.ConfigInvalidException;
 import org.eclipse.jgit.lib.BlobBasedConfig;
 import org.eclipse.jgit.lib.Config;
 import org.eclipse.jgit.lib.FileMode;
@@ -43,7 +42,6 @@ import org.eclipse.jgit.treewalk.TreeWalk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -65,15 +63,11 @@ public class DependsOnMergeValidator implements MergeValidationListener {
       .compile("^\\.\\./(.*)$");
 
   @Inject
-  public DependsOnMergeValidator(GitRepositoryManager repoManager)
-      throws ConfigInvalidException, IOException {
+  public DependsOnMergeValidator(GitRepositoryManager repoManager) {
     this.repoManager = repoManager;
   }
 
-  @Override
-  public void onPreMerge(Repository repo, CodeReviewCommit commit,
-      ProjectState destProject, NameKey destBranch, Id patchSetId)
-      throws MergeValidationException {
+  public boolean validate(Repository repo, RevCommit commit) {
     final List<String> dependsOnFooters =
         commit.getFooterLines(DependsOnCommitValidator.DEPENDS_ON);
 
@@ -133,9 +127,21 @@ public class DependsOnMergeValidator implements MergeValidationListener {
 
       if (!valid) {
         log.info("Failed validation of " + dependency);
-        throw new MergeValidationException(CommitMergeStatus.MISSING_DEPENDENCY);
+        return false;
       }
     }
+
+    return true;
+  }
+
+  @Override
+  public void onPreMerge(Repository repo, CodeReviewCommit commit,
+      ProjectState destProject, NameKey destBranch, Id patchSetId)
+      throws MergeValidationException {
+    if (!validate(repo, commit)) {
+      throw new MergeValidationException(CommitMergeStatus.MISSING_DEPENDENCY);
+    }
+
   }
 
   private boolean isChangeMergedInto(String changeId, RevCommit commit) {

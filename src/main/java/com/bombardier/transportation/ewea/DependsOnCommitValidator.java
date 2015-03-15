@@ -17,8 +17,6 @@ package com.bombardier.transportation.ewea;
  */
 
 import com.google.gerrit.extensions.annotations.Listen;
-import com.google.gerrit.extensions.api.GerritApi;
-import com.google.gerrit.extensions.common.ChangeInfo;
 import com.google.gerrit.reviewdb.client.Project.NameKey;
 import com.google.gerrit.server.events.CommitReceivedEvent;
 import com.google.gerrit.server.git.GitRepositoryManager;
@@ -28,7 +26,6 @@ import com.google.gerrit.server.git.validators.CommitValidationMessage;
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
 
-import org.eclipse.jgit.errors.ConfigInvalidException;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.FooterKey;
@@ -37,7 +34,6 @@ import org.eclipse.jgit.revwalk.RevWalk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.regex.Matcher;
@@ -49,7 +45,6 @@ public class DependsOnCommitValidator implements CommitValidationListener {
   private static final Logger log = LoggerFactory
       .getLogger(DependsOnCommitValidator.class);
 
-  private final GerritApi api;
   private final GitRepositoryManager repoManager;
 
   public static final FooterKey DEPENDS_ON = new FooterKey("Depends-On");
@@ -59,10 +54,7 @@ public class DependsOnCommitValidator implements CommitValidationListener {
       .compile("^(.*)~(.*)~([0-9a-f]{8,}.*)$");
 
   @Inject
-  public DependsOnCommitValidator(GerritApi api,
-      GitRepositoryManager repoManager) throws ConfigInvalidException,
-      IOException {
-    this.api = api;
+  public DependsOnCommitValidator(GitRepositoryManager repoManager) {
     this.repoManager = repoManager;
   }
 
@@ -70,73 +62,102 @@ public class DependsOnCommitValidator implements CommitValidationListener {
   @Override
   public List<CommitValidationMessage> onCommitReceived(
       CommitReceivedEvent receiveEvent) throws CommitValidationException {
-    final List<String> dependsOnFooters =
-        receiveEvent.commit.getFooterLines(DEPENDS_ON);
-
     List<CommitValidationMessage> messages =
         new LinkedList<CommitValidationMessage>();
 
-    for (String dependency : dependsOnFooters) {
-      dependency = dependency.trim();
+    if (receiveEvent.command.getRefName().startsWith("refs/for")) {
+      final List<String> dependsOnFooters =
+          receiveEvent.commit.getFooterLines(DEPENDS_ON);
 
-      log.info("Validating dependency: " + dependency);
+      for (String dependency : dependsOnFooters) {
+        dependency = dependency.trim();
 
-      boolean valid = false;
+        log.info("Validating dependency: " + dependency);
 
-      Matcher changeMatcher = DEPENDS_ON_CHANGE_PATTERN.matcher(dependency);
-      Matcher commitMatcher = DEPENDS_ON_COMMIT_PATTERN.matcher(dependency);
+        boolean valid = false;
 
-      try {
-        if (changeMatcher.matches()) {
-          String project = changeMatcher.group(1);
-          String branch = changeMatcher.group(2);
-          String changeId = changeMatcher.group(3);
+        Matcher changeMatcher = DEPENDS_ON_CHANGE_PATTERN.matcher(dependency);
+        Matcher commitMatcher = DEPENDS_ON_COMMIT_PATTERN.matcher(dependency);
 
-          log.info("Commit depends on change " + changeId + " in " + project
-              + "[" + branch + "]");
+        try {
+          if (changeMatcher.matches()) {
+            String project = changeMatcher.group(1);
+            String branch = changeMatcher.group(2);
+            String changeId = changeMatcher.group(3);
 
-          for (ChangeInfo change : api.changes().query().get()) {
-            if (change.project.equals(project) && change.branch.equals(branch)
-                && change.changeId.equals(changeId)) {
-              valid = true;
+            log.info("Commit depends on change " + changeId + " in " + project
+                + "[" + branch + "]");
+
+            valid = true;
+          } else if (commitMatcher.matches()) {
+            String project = commitMatcher.group(1);
+            String branch = commitMatcher.group(2);
+            String commitId = commitMatcher.group(3);
+
+            log.info("Commit depends on commit " + commitId + " in " + project
+                + "[" + branch + "]");
+
+            Repository repo =
+                repoManager.openRepository(NameKey.parse(project));
+            try {
+              RevWalk rw = new RevWalk(repo);
+              RevCommit branchHead =
+                  rw.parseCommit(repo.getRef(branch).getObjectId());
+              rw.reset();
+
+              RevCommit commit = rw.parseCommit(ObjectId.fromString(commitId));
+              rw.reset();
+
+              valid = rw.isMergedInto(commit, branchHead);
+            } finally {
+              repo.close();
             }
           }
-        } else if (commitMatcher.matches()) {
-          String project = commitMatcher.group(1);
-          String branch = commitMatcher.group(2);
-          String commitId = commitMatcher.group(3);
+        } catch (Exception e) {
+          log.info("Exception while validating " + dependency + ": "
+              + e.toString());
+        }
 
-          log.info("Commit depends on commit " + commitId + " in " + project
-              + "[" + branch + "]");
+        if (!valid) {
+          messages.add(new CommitValidationMessage("Dependency: " + dependency
+              + " not found!", true));
+          log.info("Failed validation of " + dependency);
+        } else {
+          log.info("Successfully validated " + dependency);
+        }
+      }
+    } else {
+      boolean valid = false;
 
-          Repository repo = repoManager.openRepository(NameKey.parse(project));
-          try {
-            RevWalk rw = new RevWalk(repo);
-            RevCommit branchHead =
-                rw.parseCommit(repo.getRef(branch).getObjectId());
-            rw.reset();
+      DependsOnMergeValidator mergeValidator =
+          new DependsOnMergeValidator(repoManager);
 
-            RevCommit commit = rw.parseCommit(ObjectId.fromString(commitId));
-            rw.reset();
+      Repository repo;
+      try {
+        repo = repoManager.openRepository(receiveEvent.project.getNameKey());
 
-            valid = rw.isMergedInto(commit, branchHead);
-          } finally {
-            repo.close();
+        try {
+
+          if (mergeValidator.validate(repo, receiveEvent.commit)) {
+            valid = true;
           }
+        } finally {
+          repo.close();
         }
       } catch (Exception e) {
-        log.info("Exception while validating " + dependency + ": "
-            + e.toString());
+        log.info("Exception while validating " + receiveEvent.commit.getName()
+            + ": " + e.toString());
       }
 
       if (!valid) {
-        messages.add(new CommitValidationMessage("Dependency: " + dependency
-            + " not found!", true));
-        log.info("Failed validation of " + dependency);
+        messages.add(new CommitValidationMessage("Failed validation of: "
+            + receiveEvent.commit.getName(), true));
+        log.info("Failed validation of " + receiveEvent.commit.getName());
       } else {
-        log.info("Successfully validated " + dependency);
+        log.info("Successfully validated " + receiveEvent.commit.getName());
       }
     }
+
     if (messages.size() > 0) {
       throw new CommitValidationException(
           String.format("Failed to validate some dependencies for the commit!%n%n"
