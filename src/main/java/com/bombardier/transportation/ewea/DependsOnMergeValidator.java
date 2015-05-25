@@ -42,6 +42,7 @@ import org.eclipse.jgit.treewalk.TreeWalk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.FileNotFoundException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -196,6 +197,7 @@ public class DependsOnMergeValidator implements MergeValidationListener {
           }
         }
       }
+    } catch (FileNotFoundException e) {
     } catch (Exception e) {
       log.info("Failed to parse .gitmodules file: " + e.toString());
     }
