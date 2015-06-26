@@ -21,12 +21,12 @@ limitations under the License.
   <groupId>com.bombardier.transportation.ewea</groupId>
   <artifactId>submodule</artifactId>
   <packaging>jar</packaging>
-  <version>0.2</version>
+  <version>0.3</version>
   <name>submodule</name>
 
   <properties>
     <Gerrit-ApiType>plugin</Gerrit-ApiType>
-    <Gerrit-ApiVersion>2.11</Gerrit-ApiVersion>
+    <Gerrit-ApiVersion>2.11.1</Gerrit-ApiVersion>
   </properties>
 
   <build>
